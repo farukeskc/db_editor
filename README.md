@@ -1,8 +1,8 @@
 # db_editor
 
-Çok basit bir masaüstü uygulama: bir MP4 dosyasını açar, oynatırken mikrofondan
-ses kaydeder ve kaydedilen sesi videoyla birleştirip (orijinal sesin yerine)
-yeni bir MP4 dosyası olarak dışa aktarır.
+Çok basit iki masaüstü video editörü uygulaması içerir: biri MP4 üzerine
+mikrofonla ses dublajı yapar (`app.py`), diğeri MP4 videolarını kesip
+(trim) yeni bir dosya olarak dışa aktarır (`cutter_app.py`).
 
 ## Kurulum
 
@@ -12,13 +12,15 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-## Çalıştırma
+## Ses Dublaj Editörü (`app.py`)
+
+### Çalıştırma
 
 ```bash
 python app.py
 ```
 
-## Kullanım
+### Kullanım
 
 1. **MP4 Aç...** ile bir video dosyası seçin.
 2. İsterseniz **Önizle** ile videoyu (sessiz) izleyin.
@@ -28,9 +30,60 @@ python app.py
 4. **Kaydet** ile videoyu, kaydettiğiniz sesle birleştirip yeni bir MP4
    dosyası olarak dışa aktarın.
 
-## Notlar
+### Notlar
 
 - Video/ses birleştirme için `imageio-ffmpeg` paketiyle gelen ffmpeg
   binary'si kullanılır; ayrıca sisteme ffmpeg kurmanıza gerek yoktur.
 - Orijinal video görüntüsü aynen korunur (yeniden kodlanmaz), sadece ses
   parçası mikrofon kaydınızla değiştirilir.
+
+## Kesme (Cut) Editörü (`cutter_app.py`)
+
+### Çalıştırma
+
+```bash
+python cutter_app.py
+```
+
+### Kullanım
+
+1. **MP4 Aç...** ile bir video dosyası seçin.
+2. Zaman çubuğunu sürükleyerek videoda gezinin; önizleme karesi anlık
+   güncellenir.
+3. İstediğiniz noktada **Buradan İşaretle** ile başlangıç/bitiş zamanlarını
+   belirleyin (ya da saniye cinsinden doğrudan kutulara yazıp **Git** ile
+   o noktaya atlayın).
+4. **Seçimi Önizle** ile seçtiğiniz aralığı oynatarak kontrol edin.
+5. **✂ Kes ve Dışa Aktar** ile seçili aralığı yeni bir MP4 dosyası olarak
+   kaydedin.
+
+### Notlar
+
+- Varsayılan kesim modu hızlıdır (ses/görüntü yeniden kodlanmaz, `stream
+  copy`), ancak başlangıç noktası en yakın keyframe'e yuvarlanabilir.
+- **"Kare hassasiyetiyle kes"** kutusunu işaretlerseniz video yeniden
+  kodlanır (daha yavaştır) ve kesim tam olarak belirttiğiniz saniyeden
+  başlar.
+- Kesme işlemi için de `imageio-ffmpeg` paketiyle gelen ffmpeg binary'si
+  kullanılır.
+
+### Kare Dondur (ekranda durup konuşma kaydetmek için)
+
+Aynı pencerede, videonun belirli bir anındaki kareyi bir süreliğine
+dondurup videoyu o kadar uzatabileceğiniz bir bölüm de bulunur. Bunu,
+örneğin bir sunumda belirli bir ekranda durup üzerine sesli anlatım
+kaydetmek istediğinizde kullanabilirsiniz:
+
+1. **Dondurulacak an (sn)** kutusuna zaman çubuğundaki konumdan
+   **Buradan İşaretle** ile ya da doğrudan saniye yazarak bir nokta seçin.
+2. **Dondurma süresi (sn)** kutusuna karenin ne kadar süre sabit kalacağını
+   yazın.
+3. **🧊 Kareyi Dondur ve Dışa Aktar** ile yeni bir MP4 oluşturun: seçilen
+   kare belirttiğiniz süre boyunca ekranda sabit kalır, video toplam
+   uzunluğu bu süre kadar artar.
+4. Dondurulan bölümün sesi sessizdir; isterseniz çıkan dosyayı `app.py`
+   ile açıp o bölüme mikrofonunuzdan konuşma kaydedebilirsiniz.
+
+Bu işlem videoyu üç parçaya (dondurma anına kadar, dondurulmuş kare,
+dondurma anından sona kadar) ayırıp yeniden kodlayarak birleştirir, bu
+yüzden kesmeye göre biraz daha uzun sürebilir.
