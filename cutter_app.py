@@ -4,17 +4,22 @@ MP4 Kesme (Cut) Editörü
 app.py'daki dublaj editörüne benzer, çok basit bir masaüstü uygulama:
 bir MP4 dosyası açar, zaman çizelgesinde gezinerek başlangıç/bitiş
 noktaları belirlemenizi sağlar ve seçtiğiniz aralığı yeni bir MP4
-dosyası olarak dışa aktarır (kesme/trim işlemi).
+dosyası olarak dışa aktarır (kesme/trim işlemi). Ayrıca videonun
+belirli bir anındaki kareyi bir süreliğine dondurup videoyu o kadar
+uzatan bir "kare dondurma" mekanizması da içerir (ör. bir ekranda
+durup üzerine konuşma kaydetmek için).
 
 Kullanılan araçlar:
  - tkinter          : arayüz
  - opencv-python     : video kare okuma / önizleme
  - Pillow            : kareleri tkinter'da gösterme
  - imageio-ffmpeg    : sistemde ffmpeg kurulu olmasa da ffmpeg
-                        binary'sini sağlar (kesme işlemi)
+                        binary'sini sağlar (kesme / kare dondurma işlemi)
 """
 
 import os
+import shutil
+import tempfile
 import time
 import threading
 import subprocess
@@ -55,8 +60,8 @@ class CutterApp:
     def __init__(self, root):
         self.root = root
         self.root.title(APP_TITLE)
-        self.root.geometry("880x640")
-        self.root.minsize(720, 540)
+        self.root.geometry("880x760")
+        self.root.minsize(720, 640)
 
         self.video_info = None
         self.playing = False
@@ -66,6 +71,8 @@ class CutterApp:
 
         self.start_time = 0.0
         self.end_time = 0.0
+        self.freeze_time = 0.0
+        self._temp_dir = tempfile.mkdtemp(prefix="cutter_editor_")
 
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -160,6 +167,56 @@ class CutterApp:
         )
         self.chk_precise.grid(row=3, column=0, columnspan=4, sticky="w", pady=(6, 0))
 
+        # ------------------------------------------------------- Kare Dondurma
+        freeze_frame = ttk.LabelFrame(
+            self.root, text="Kare Dondur (Durup Konuşma Kaydı için)", padding=10
+        )
+        freeze_frame.pack(fill="x", padx=10, pady=(0, 10))
+
+        ttk.Label(freeze_frame, text="Dondurulacak an (sn):").grid(
+            row=0, column=0, sticky="w"
+        )
+        self.freeze_var = tk.StringVar(value="0.0")
+        self.freeze_entry = ttk.Entry(freeze_frame, textvariable=self.freeze_var, width=10)
+        self.freeze_entry.grid(row=0, column=1, padx=(4, 10))
+        self.btn_mark_freeze = ttk.Button(
+            freeze_frame,
+            text="Buradan İşaretle",
+            command=self.mark_freeze,
+            state="disabled",
+        )
+        self.btn_mark_freeze.grid(row=0, column=2, padx=(0, 4))
+        self.btn_goto_freeze = ttk.Button(
+            freeze_frame, text="Git", width=5, command=self.goto_freeze, state="disabled"
+        )
+        self.btn_goto_freeze.grid(row=0, column=3)
+
+        ttk.Label(freeze_frame, text="Dondurma süresi (sn):").grid(
+            row=1, column=0, sticky="w", pady=(6, 0)
+        )
+        self.freeze_duration_var = tk.StringVar(value="3.0")
+        self.freeze_duration_entry = ttk.Entry(
+            freeze_frame, textvariable=self.freeze_duration_var, width=10
+        )
+        self.freeze_duration_entry.grid(row=1, column=1, padx=(4, 10), pady=(6, 0))
+
+        self.btn_freeze = ttk.Button(
+            freeze_frame,
+            text="🧊 Kareyi Dondur ve Dışa Aktar",
+            command=self.freeze_export,
+            state="disabled",
+        )
+        self.btn_freeze.grid(row=1, column=2, columnspan=2, sticky="w", pady=(6, 0))
+
+        ttk.Label(
+            freeze_frame,
+            text=(
+                "Seçilen andaki kare belirtilen süre boyunca ekranda sabit kalır,\n"
+                "bu süre videonun toplam uzunluğuna eklenir (ses o bölümde sessizdir)."
+            ),
+            foreground="#555",
+        ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
+
         # ---------------------------------------------------------- Kontroller
         controls = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         controls.pack(fill="x")
@@ -209,8 +266,10 @@ class CutterApp:
         self.video_info = info
         self.start_time = 0.0
         self.end_time = info.duration
+        self.freeze_time = 0.0
         self.start_var.set(f"{self.start_time:.1f}")
         self.end_var.set(f"{self.end_time:.1f}")
+        self.freeze_var.set("0.0")
 
         self.lbl_file.config(text=f"{os.path.basename(path)}  ({info.duration:.1f} sn)")
         self.scale.config(from_=0, to=max(info.duration, 0.01), state="normal")
@@ -224,6 +283,9 @@ class CutterApp:
             self.btn_goto_end,
             self.btn_preview_sel,
             self.btn_cut,
+            self.btn_mark_freeze,
+            self.btn_goto_freeze,
+            self.btn_freeze,
         ):
             btn.config(state="normal")
 
@@ -309,6 +371,16 @@ class CutterApp:
         self.pos_var.set(self.end_time)
         self._seek_to(self.end_time)
         self._update_selection_label()
+
+    def mark_freeze(self):
+        self.freeze_time = self.pos_var.get()
+        self.freeze_var.set(f"{self.freeze_time:.1f}")
+
+    def goto_freeze(self):
+        self.freeze_time = self._read_time_entry(self.freeze_var, self.freeze_time)
+        self.freeze_var.set(f"{self.freeze_time:.1f}")
+        self.pos_var.set(self.freeze_time)
+        self._seek_to(self.freeze_time)
 
     # ------------------------------------------------------------- Oynatma
     def toggle_play(self):
@@ -455,9 +527,170 @@ class CutterApp:
             self.set_status(f"Tamamlandı: {out_path}")
             messagebox.showinfo("Bitti", f"Kesilmiş video kaydedildi:\n{out_path}")
 
+    # --------------------------------------------------------- Kare Dondurma
+    def freeze_export(self):
+        if not self.video_info:
+            return
+
+        freeze_time = self._read_time_entry(self.freeze_var, self.freeze_time)
+        try:
+            freeze_duration = float(self.freeze_duration_var.get())
+        except ValueError:
+            freeze_duration = 0.0
+        if freeze_duration <= 0:
+            messagebox.showwarning("Uyarı", "Dondurma süresi 0'dan büyük olmalı.")
+            return
+
+        self.freeze_time = freeze_time
+        self.freeze_var.set(f"{freeze_time:.1f}")
+
+        base = os.path.splitext(os.path.basename(self.video_info.path))[0]
+        default_name = f"{base}_donduruldu.mp4"
+        out_path = filedialog.asksaveasfilename(
+            title="Dondurulmuş videoyu kaydet",
+            defaultextension=".mp4",
+            initialfile=default_name,
+            filetypes=[("MP4 video", "*.mp4")],
+        )
+        if not out_path:
+            return
+
+        self.btn_freeze.config(state="disabled")
+        self.progress.start(12)
+        self.set_status("Kare donduruluyor ve video oluşturuluyor...")
+        threading.Thread(
+            target=self._run_freeze_export,
+            args=(out_path, freeze_time, freeze_duration),
+            daemon=True,
+        ).start()
+
+    def _run_freeze_export(self, out_path, freeze_time, freeze_duration):
+        """Videoyu [0, T] + [dondurulmuş kare x süre] + [T, son] olarak
+        yeniden birleştirip tek bir MP4 olarak dışa aktarır."""
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        work_dir = tempfile.mkdtemp(prefix="freeze_", dir=self._temp_dir)
+
+        def run(cmd):
+            result = subprocess.run(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            )
+            if result.returncode != 0:
+                raise RuntimeError(result.stdout[-2000:])
+
+        try:
+            fps = self.video_info.fps or 25.0
+            total_duration = self.video_info.duration
+            freeze_time = min(max(freeze_time, 0.0), total_duration)
+            tail_duration = total_duration - freeze_time
+
+            frame_path = os.path.join(work_dir, "frame.png")
+            part_a = os.path.join(work_dir, "part_a.mp4")
+            freeze_clip = os.path.join(work_dir, "freeze.mp4")
+            part_b = os.path.join(work_dir, "part_b.mp4")
+            concat_list = os.path.join(work_dir, "concat.txt")
+
+            # 1) Dondurulacak andaki kareyi PNG olarak çıkar.
+            run([
+                ffmpeg_exe, "-y",
+                "-i", self.video_info.path,
+                "-ss", f"{freeze_time:.3f}",
+                "-frames:v", "1",
+                frame_path,
+            ])
+
+            segment_paths = []
+
+            # 2) Baştan donma anına kadar olan parça (varsa).
+            if freeze_time > 0.05:
+                run([
+                    ffmpeg_exe, "-y",
+                    "-i", self.video_info.path,
+                    "-t", f"{freeze_time:.3f}",
+                    "-r", f"{fps:.3f}",
+                    "-pix_fmt", "yuv420p",
+                    "-c:v", "libx264",
+                    "-c:a", "aac", "-ar", "44100", "-ac", "2",
+                    part_a,
+                ])
+                segment_paths.append(part_a)
+
+            # 3) Dondurulan kare + sessiz ses, istenen süre boyunca.
+            run([
+                ffmpeg_exe, "-y",
+                "-loop", "1", "-i", frame_path,
+                "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+                "-t", f"{freeze_duration:.3f}",
+                "-r", f"{fps:.3f}",
+                "-pix_fmt", "yuv420p",
+                "-c:v", "libx264",
+                "-c:a", "aac", "-ar", "44100", "-ac", "2",
+                "-shortest",
+                freeze_clip,
+            ])
+            segment_paths.append(freeze_clip)
+
+            # 4) Donma anından videonun sonuna kadar olan parça (varsa).
+            if tail_duration > 0.05:
+                run([
+                    ffmpeg_exe, "-y",
+                    "-ss", f"{freeze_time:.3f}",
+                    "-i", self.video_info.path,
+                    "-t", f"{tail_duration:.3f}",
+                    "-r", f"{fps:.3f}",
+                    "-pix_fmt", "yuv420p",
+                    "-c:v", "libx264",
+                    "-c:a", "aac", "-ar", "44100", "-ac", "2",
+                    part_b,
+                ])
+                segment_paths.append(part_b)
+
+            # 5) Parçaları concat demuxer ile tek dosyada birleştir.
+            with open(concat_list, "w", encoding="utf-8") as f:
+                for p in segment_paths:
+                    escaped = p.replace("'", "'\\''")
+                    f.write(f"file '{escaped}'\n")
+
+            try:
+                run([
+                    ffmpeg_exe, "-y",
+                    "-f", "concat", "-safe", "0",
+                    "-i", concat_list,
+                    "-c", "copy",
+                    out_path,
+                ])
+            except Exception:
+                # Parametre uyuşmazlığı gibi bir sebeple kopyalama başarısız
+                # olursa, birleştirirken yeniden kodlayarak tekrar dene.
+                run([
+                    ffmpeg_exe, "-y",
+                    "-f", "concat", "-safe", "0",
+                    "-i", concat_list,
+                    "-pix_fmt", "yuv420p",
+                    "-c:v", "libx264",
+                    "-c:a", "aac",
+                    out_path,
+                ])
+
+            self.root.after(0, self._freeze_done, out_path, None)
+        except Exception as exc:
+            self.root.after(0, self._freeze_done, out_path, exc)
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+    def _freeze_done(self, out_path, error):
+        self.progress.stop()
+        self.btn_freeze.config(state="normal")
+        if error:
+            self.set_status("Kare dondurma işlemi başarısız.")
+            messagebox.showerror("Hata", f"Video oluşturulamadı:\n{error}")
+        else:
+            self.set_status(f"Tamamlandı: {out_path}")
+            messagebox.showinfo("Bitti", f"Dondurulmuş video kaydedildi:\n{out_path}")
+
     # -------------------------------------------------------------- Kapatma
     def _on_close(self):
         self._stop_flag.set()
+        shutil.rmtree(self._temp_dir, ignore_errors=True)
         self.root.destroy()
 
 

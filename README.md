@@ -66,3 +66,24 @@ python cutter_app.py
   başlar.
 - Kesme işlemi için de `imageio-ffmpeg` paketiyle gelen ffmpeg binary'si
   kullanılır.
+
+### Kare Dondur (ekranda durup konuşma kaydetmek için)
+
+Aynı pencerede, videonun belirli bir anındaki kareyi bir süreliğine
+dondurup videoyu o kadar uzatabileceğiniz bir bölüm de bulunur. Bunu,
+örneğin bir sunumda belirli bir ekranda durup üzerine sesli anlatım
+kaydetmek istediğinizde kullanabilirsiniz:
+
+1. **Dondurulacak an (sn)** kutusuna zaman çubuğundaki konumdan
+   **Buradan İşaretle** ile ya da doğrudan saniye yazarak bir nokta seçin.
+2. **Dondurma süresi (sn)** kutusuna karenin ne kadar süre sabit kalacağını
+   yazın.
+3. **🧊 Kareyi Dondur ve Dışa Aktar** ile yeni bir MP4 oluşturun: seçilen
+   kare belirttiğiniz süre boyunca ekranda sabit kalır, video toplam
+   uzunluğu bu süre kadar artar.
+4. Dondurulan bölümün sesi sessizdir; isterseniz çıkan dosyayı `app.py`
+   ile açıp o bölüme mikrofonunuzdan konuşma kaydedebilirsiniz.
+
+Bu işlem videoyu üç parçaya (dondurma anına kadar, dondurulmuş kare,
+dondurma anından sona kadar) ayırıp yeniden kodlayarak birleştirir, bu
+yüzden kesmeye göre biraz daha uzun sürebilir.
