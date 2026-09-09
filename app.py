@@ -67,7 +67,7 @@ class AudioRecorder:
     def _callback(self, indata, frames, time_info, status):
         self._queue.put(indata.copy())
 
-    def start(self, out_path):
+    def start(self, out_path, device=None):
         self._out_path = out_path
         self._recording = True
         self._queue = queue.Queue()
@@ -75,6 +75,7 @@ class AudioRecorder:
         self._stream = sd.InputStream(
             samplerate=self.samplerate,
             channels=self.channels,
+            device=device,
             callback=self._callback,
         )
         self._stream.start()
@@ -137,6 +138,25 @@ class EditorApp:
         self.lbl_file = ttk.Label(top, text="Dosya seçilmedi", foreground="#555")
         self.lbl_file.pack(side="left", padx=10)
 
+        mic_frame = ttk.Frame(self.root, padding=(10, 0))
+        mic_frame.pack(fill="x")
+
+        ttk.Label(mic_frame, text="Mikrofon:").pack(side="left")
+
+        self.mic_var = tk.StringVar()
+        self.mic_combo = ttk.Combobox(
+            mic_frame, textvariable=self.mic_var, state="readonly", width=60
+        )
+        self.mic_combo.pack(side="left", padx=(6, 6))
+
+        self.btn_refresh_mics = ttk.Button(
+            mic_frame, text="Yenile", command=self.refresh_devices
+        )
+        self.btn_refresh_mics.pack(side="left")
+
+        self._input_devices = []
+        self.refresh_devices()
+
         video_frame = ttk.Frame(self.root, padding=(10, 0))
         video_frame.pack(fill="both", expand=True)
 
@@ -178,6 +198,57 @@ class EditorApp:
 
     def set_status(self, text):
         self.lbl_status.config(text=text)
+
+    # ------------------------------------------------------------ Devices
+    def refresh_devices(self):
+        """Sistemdeki mikrofon (giriş) cihazlarını listeler."""
+        try:
+            devices = sd.query_devices()
+        except Exception as exc:
+            self._input_devices = []
+            self.mic_combo["values"] = []
+            self.mic_var.set("")
+            messagebox.showerror("Hata", f"Ses cihazları listelenemedi:\n{exc}")
+            return
+
+        try:
+            default_input = sd.default.device[0]
+        except Exception:
+            default_input = None
+
+        self._input_devices = [
+            (idx, d) for idx, d in enumerate(devices) if d.get("max_input_channels", 0) > 0
+        ]
+
+        labels = []
+        default_label = None
+        for idx, d in self._input_devices:
+            label = f"{idx}: {d['name']}"
+            if idx == default_input:
+                label += "  (varsayılan)"
+                default_label = label
+            labels.append(label)
+
+        self.mic_combo["values"] = labels
+        if labels:
+            self.mic_var.set(default_label or labels[0])
+        else:
+            self.mic_var.set("")
+            messagebox.showwarning(
+                "Mikrofon bulunamadı",
+                "Sistemde giriş yapabilen bir mikrofon bulunamadı.",
+            )
+
+    def get_selected_device(self):
+        """Combobox'ta seçili cihazın sounddevice index'ini döndürür."""
+        selected = self.mic_var.get()
+        if not selected:
+            return None
+        try:
+            device_index = int(selected.split(":", 1)[0])
+        except ValueError:
+            return None
+        return device_index
 
     # --------------------------------------------------------------- Video
     def open_video(self):
@@ -233,6 +304,11 @@ class EditorApp:
         if self.recording:
             self._stop_flag.set()
             return
+        if self.get_selected_device() is None:
+            messagebox.showwarning(
+                "Mikrofon seçilmedi", "Lütfen önce bir mikrofon seçin."
+            )
+            return
         if not messagebox.askyesno(
             "Kayda başla",
             "Video oynatılırken mikrofonunuzdan ses kaydedilecek.\n"
@@ -245,11 +321,21 @@ class EditorApp:
         self._stop_flag.clear()
         self.playing = True
         if record_audio:
+            try:
+                self.recorder.start(self._recorded_wav, device=self.get_selected_device())
+            except Exception as exc:
+                self.playing = False
+                messagebox.showerror(
+                    "Mikrofon hatası",
+                    f"Seçilen mikrofon açılamadı:\n{exc}\n\n"
+                    "Lütfen 'Mikrofon' listesinden başka bir cihaz seçip tekrar deneyin.",
+                )
+                self.set_status("Kayıt başlatılamadı.")
+                return
             self.recording = True
             self.btn_record.config(text="■ Kaydı Durdur")
             self.btn_play.config(state="disabled")
             self.btn_export.config(state="disabled")
-            self.recorder.start(self._recorded_wav)
             self.set_status("Kayıt yapılıyor... Video oynatılıyor, mikrofon dinleniyor.")
         else:
             self.btn_play.config(text="■ Durdur")
