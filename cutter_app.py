@@ -2,12 +2,14 @@
 MP4 Kesme (Cut) Editörü
 =======================
 app.py'daki dublaj editörüne benzer, çok basit bir masaüstü uygulama:
-bir MP4 dosyası açar, zaman çizelgesinde gezinerek başlangıç/bitiş
-noktaları belirlemenizi sağlar ve seçtiğiniz aralığı yeni bir MP4
-dosyası olarak dışa aktarır (kesme/trim işlemi). Ayrıca videonun
-belirli bir anındaki kareyi bir süreliğine dondurup videoyu o kadar
-uzatan bir "kare dondurma" mekanizması da içerir (ör. bir ekranda
-durup üzerine konuşma kaydetmek için).
+bir MP4 dosyası açar, zaman çizelgesinde gezinerek videodan çıkarmak
+istediğiniz bir veya daha fazla bölümü işaretlemenizi sağlar; bu
+bölümler videodan silinir ve kalan parçalar birleştirilip yeni bir MP4
+dosyası olarak dışa aktarılır (yani "kes ve çıkar", tersine "yalnızca
+seçileni tut" değil). Ayrıca videonun belirli bir anındaki kareyi bir
+süreliğine dondurup videoyu o kadar uzatan bir "kare dondurma"
+mekanizması da içerir (ör. bir ekranda durup üzerine konuşma kaydetmek
+için).
 
 Kullanılan araçlar:
  - tkinter          : arayüz
@@ -42,6 +44,35 @@ def format_time(seconds):
     return f"{minutes}:{secs:04.1f}"
 
 
+def merge_segments(segments):
+    """Çakışan/bitişik (başlangıç, bitiş) aralıklarını birleştirip
+    başlangıca göre sıralanmış, ayrık bir liste döndürür."""
+    valid = sorted((max(s, 0.0), max(e, 0.0)) for s, e in segments if e > s)
+    if not valid:
+        return []
+    merged = [list(valid[0])]
+    for start, end in valid[1:]:
+        if start <= merged[-1][1] + 0.05:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return [(s, e) for s, e in merged]
+
+
+def complement_segments(removed, total_duration):
+    """Çıkarılacak aralıkların (removed) tümleyenini, yani videodan
+    korunacak aralıkları döndürür."""
+    keep = []
+    cursor = 0.0
+    for start, end in removed:
+        if start > cursor + 0.05:
+            keep.append((cursor, start))
+        cursor = max(cursor, end)
+    if cursor < total_duration - 0.05:
+        keep.append((cursor, total_duration))
+    return keep
+
+
 class VideoInfo:
     def __init__(self, path):
         self.path = path
@@ -72,6 +103,7 @@ class CutterApp:
         self.start_time = 0.0
         self.end_time = 0.0
         self.freeze_time = 0.0
+        self.removed_segments = []
         self._temp_dir = tempfile.mkdtemp(prefix="cutter_editor_")
 
         self._build_ui()
@@ -121,7 +153,9 @@ class CutterApp:
         self.btn_play.pack(side="right")
 
         # --------------------------------------------------------- İşaretleme
-        mark_frame = ttk.LabelFrame(self.root, text="Kesim Aralığı", padding=10)
+        mark_frame = ttk.LabelFrame(
+            self.root, text="Çıkarılacak Bölümler (videodan silinecek aralıklar)", padding=10
+        )
         mark_frame.pack(fill="x", padx=10, pady=(0, 10))
 
         ttk.Label(mark_frame, text="Başlangıç (sn):").grid(row=0, column=0, sticky="w")
@@ -156,8 +190,58 @@ class CutterApp:
         )
         self.btn_goto_end.grid(row=1, column=3, pady=(6, 0))
 
-        self.lbl_selection = ttk.Label(mark_frame, text="Seçili aralık: 0.0 sn")
-        self.lbl_selection.grid(row=2, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        self.lbl_selection = ttk.Label(mark_frame, text="Yeni bölüm: 0.0 sn")
+        self.lbl_selection.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
+        self.btn_preview_sel = ttk.Button(
+            mark_frame,
+            text="Seçimi Önizle",
+            command=self.preview_selection,
+            state="disabled",
+        )
+        self.btn_preview_sel.grid(row=2, column=2, sticky="w", pady=(8, 0))
+
+        self.btn_add_segment = ttk.Button(
+            mark_frame,
+            text="➕ Bu Aralığı Listeye Ekle",
+            command=self.add_segment,
+            state="disabled",
+        )
+        self.btn_add_segment.grid(row=2, column=3, sticky="w", pady=(8, 0))
+
+        list_row = ttk.Frame(mark_frame)
+        list_row.grid(row=3, column=0, columnspan=4, sticky="we", pady=(8, 0))
+        mark_frame.grid_columnconfigure(3, weight=1)
+
+        self.segment_listbox = tk.Listbox(list_row, height=5, exportselection=False)
+        self.segment_listbox.pack(side="left", fill="both", expand=True)
+        segment_scroll = ttk.Scrollbar(
+            list_row, orient="vertical", command=self.segment_listbox.yview
+        )
+        segment_scroll.pack(side="left", fill="y")
+        self.segment_listbox.config(yscrollcommand=segment_scroll.set)
+
+        list_btn_row = ttk.Frame(mark_frame)
+        list_btn_row.grid(row=4, column=0, columnspan=4, sticky="w", pady=(6, 0))
+
+        self.btn_delete_segment = ttk.Button(
+            list_btn_row,
+            text="Seçili Satırı Sil",
+            command=self.delete_selected_segment,
+            state="disabled",
+        )
+        self.btn_delete_segment.pack(side="left")
+
+        self.btn_clear_segments = ttk.Button(
+            list_btn_row,
+            text="Listeyi Temizle",
+            command=self.clear_segments,
+            state="disabled",
+        )
+        self.btn_clear_segments.pack(side="left", padx=(8, 0))
+
+        self.lbl_removal_summary = ttk.Label(mark_frame, text="0 bölüm çıkarılacak.")
+        self.lbl_removal_summary.grid(row=5, column=0, columnspan=4, sticky="w", pady=(8, 0))
 
         self.precise_var = tk.BooleanVar(value=False)
         self.chk_precise = ttk.Checkbutton(
@@ -165,7 +249,7 @@ class CutterApp:
             text="Kare hassasiyetiyle kes (yeniden kodla, daha yavaş)",
             variable=self.precise_var,
         )
-        self.chk_precise.grid(row=3, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        self.chk_precise.grid(row=6, column=0, columnspan=4, sticky="w", pady=(6, 0))
 
         # ------------------------------------------------------- Kare Dondurma
         freeze_frame = ttk.LabelFrame(
@@ -221,21 +305,13 @@ class CutterApp:
         controls = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         controls.pack(fill="x")
 
-        self.btn_preview_sel = ttk.Button(
-            controls,
-            text="Seçimi Önizle",
-            command=self.preview_selection,
-            state="disabled",
-        )
-        self.btn_preview_sel.pack(side="left")
-
         self.btn_cut = ttk.Button(
             controls,
-            text="✂ Kes ve Dışa Aktar",
-            command=self.cut_video,
+            text="✂ Bölümleri Çıkar ve Dışa Aktar",
+            command=self.export_without_segments,
             state="disabled",
         )
-        self.btn_cut.pack(side="left", padx=10)
+        self.btn_cut.pack(side="left")
 
         status = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         status.pack(fill="x")
@@ -267,6 +343,7 @@ class CutterApp:
         self.start_time = 0.0
         self.end_time = info.duration
         self.freeze_time = 0.0
+        self.removed_segments = []
         self.start_var.set(f"{self.start_time:.1f}")
         self.end_var.set(f"{self.end_time:.1f}")
         self.freeze_var.set("0.0")
@@ -282,15 +359,22 @@ class CutterApp:
             self.btn_goto_start,
             self.btn_goto_end,
             self.btn_preview_sel,
+            self.btn_add_segment,
+            self.btn_delete_segment,
+            self.btn_clear_segments,
             self.btn_cut,
             self.btn_mark_freeze,
             self.btn_goto_freeze,
             self.btn_freeze,
         ):
             btn.config(state="normal")
+        self.segment_listbox.config(state="normal")
 
         self._update_selection_label()
-        self.set_status("Video yüklendi. Zaman çubuğuyla gezinip başlangıç/bitiş seçin.")
+        self._refresh_segment_list()
+        self.set_status(
+            "Video yüklendi. Çıkarmak istediğiniz aralığı işaretleyip listeye ekleyin."
+        )
         self._seek_to(0.0)
 
     def _seek_to(self, seconds):
@@ -323,7 +407,7 @@ class CutterApp:
         length = max(self.end_time - self.start_time, 0.0)
         self.lbl_selection.config(
             text=(
-                f"Seçili aralık: {format_time(self.start_time)} → "
+                f"Yeni bölüm: {format_time(self.start_time)} → "
                 f"{format_time(self.end_time)}  ({length:.1f} sn)"
             )
         )
@@ -371,6 +455,53 @@ class CutterApp:
         self.pos_var.set(self.end_time)
         self._seek_to(self.end_time)
         self._update_selection_label()
+
+    # ----------------------------------------------------- Çıkarma Listesi
+    def add_segment(self):
+        start = self._read_time_entry(self.start_var, self.start_time)
+        end = self._read_time_entry(self.end_var, self.end_time)
+        if end <= start:
+            messagebox.showwarning("Uyarı", "Bitiş zamanı başlangıçtan büyük olmalı.")
+            return
+        self.start_time, self.end_time = start, end
+        self.removed_segments.append((start, end))
+        self._refresh_segment_list()
+        self.set_status("Bölüm çıkarma listesine eklendi.")
+
+    def _refresh_segment_list(self):
+        self.removed_segments = merge_segments(self.removed_segments)
+        self.segment_listbox.delete(0, tk.END)
+        for start, end in self.removed_segments:
+            self.segment_listbox.insert(
+                tk.END,
+                f"{format_time(start)} → {format_time(end)}   ({end - start:.1f} sn)",
+            )
+        self._update_removal_summary()
+
+    def _update_removal_summary(self):
+        total = self.video_info.duration if self.video_info else 0.0
+        removed = sum(end - start for start, end in self.removed_segments)
+        remaining = max(total - removed, 0.0)
+        self.lbl_removal_summary.config(
+            text=(
+                f"{len(self.removed_segments)} bölüm çıkarılacak ({removed:.1f} sn)  "
+                f"→  kalan video uzunluğu: {remaining:.1f} sn"
+            )
+        )
+
+    def delete_selected_segment(self):
+        selection = self.segment_listbox.curselection()
+        if not selection:
+            return
+        del self.removed_segments[selection[0]]
+        self._refresh_segment_list()
+
+    def clear_segments(self):
+        if not self.removed_segments:
+            return
+        if messagebox.askyesno("Listeyi Temizle", "Çıkarma listesindeki tüm bölümler silinsin mi?"):
+            self.removed_segments = []
+            self._refresh_segment_list()
 
     def mark_freeze(self):
         self.freeze_time = self.pos_var.get()
@@ -452,13 +583,85 @@ class CutterApp:
         self.set_status("Oynatma durdu.")
 
     # --------------------------------------------------------------- Kesme
-    def cut_video(self):
-        start = self._read_time_entry(self.start_var, self.start_time)
-        end = self._read_time_entry(self.end_var, self.end_time)
-        if end <= start:
-            messagebox.showwarning("Uyarı", "Bitiş zamanı başlangıçtan büyük olmalı.")
+    @staticmethod
+    def _ffmpeg_run(cmd):
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stdout[-2000:])
+
+    def _build_cut_command(self, start, end, precise, out_path):
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        duration = max(end - start, 0.01)
+
+        if precise:
+            # -ss girişten sonra: yavaş ama kare hassasiyetli (yeniden kodlar).
+            return [
+                ffmpeg_exe, "-y",
+                "-i", self.video_info.path,
+                "-ss", f"{start:.3f}",
+                "-t", f"{duration:.3f}",
+                "-pix_fmt", "yuv420p",
+                "-c:v", "libx264",
+                "-c:a", "aac", "-ar", "44100", "-ac", "2",
+                out_path,
+            ]
+        # -ss girişten önce: hızlı (stream copy), ama en yakın keyframe'e
+        # yuvarlanabilir.
+        return [
+            ffmpeg_exe, "-y",
+            "-ss", f"{start:.3f}",
+            "-i", self.video_info.path,
+            "-t", f"{duration:.3f}",
+            "-c", "copy",
+            out_path,
+        ]
+
+    def _concat_via_demuxer(self, work_dir, segment_paths, out_path):
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        concat_list = os.path.join(work_dir, "concat.txt")
+        with open(concat_list, "w", encoding="utf-8") as f:
+            for p in segment_paths:
+                escaped = p.replace("'", "'\\''")
+                f.write(f"file '{escaped}'\n")
+
+        try:
+            self._ffmpeg_run([
+                ffmpeg_exe, "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", concat_list,
+                "-c", "copy",
+                out_path,
+            ])
+        except Exception:
+            # Parametre uyuşmazlığı gibi bir sebeple kopyalama başarısız
+            # olursa, birleştirirken yeniden kodlayarak tekrar dene.
+            self._ffmpeg_run([
+                ffmpeg_exe, "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", concat_list,
+                "-pix_fmt", "yuv420p",
+                "-c:v", "libx264",
+                "-c:a", "aac",
+                out_path,
+            ])
+
+    def export_without_segments(self):
+        if not self.video_info:
             return
-        self.start_time, self.end_time = start, end
+        if not self.removed_segments:
+            messagebox.showwarning(
+                "Uyarı", "Önce çıkarmak istediğiniz en az bir bölümü listeye ekleyin."
+            )
+            return
+
+        keep_segments = complement_segments(self.removed_segments, self.video_info.duration)
+        if not keep_segments:
+            messagebox.showwarning(
+                "Uyarı", "Videonun tamamı çıkarılamaz; en az bir bölüm kalmalı."
+            )
+            return
 
         base = os.path.splitext(os.path.basename(self.video_info.path))[0]
         default_name = f"{base}_kesildi.mp4"
@@ -473,56 +676,43 @@ class CutterApp:
 
         self.btn_cut.config(state="disabled")
         self.progress.start(12)
-        self.set_status("Video kesiliyor...")
+        self.set_status("Seçilen bölümler çıkarılıyor...")
         threading.Thread(
-            target=self._run_ffmpeg_cut,
-            args=(out_path, start, end, self.precise_var.get()),
+            target=self._run_remove_segments,
+            args=(out_path, keep_segments, self.precise_var.get()),
             daemon=True,
         ).start()
 
-    def _run_ffmpeg_cut(self, out_path, start, end, precise):
-        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-        duration = max(end - start, 0.01)
-
-        if precise:
-            # -ss girişten sonra: yavaş ama kare hassasiyetli (yeniden kodlar).
-            cmd = [
-                ffmpeg_exe, "-y",
-                "-i", self.video_info.path,
-                "-ss", f"{start:.3f}",
-                "-t", f"{duration:.3f}",
-                "-c:v", "libx264",
-                "-c:a", "aac",
-                out_path,
-            ]
-        else:
-            # -ss girişten önce: hızlı (stream copy), ama en yakın keyframe'e
-            # yuvarlanabilir.
-            cmd = [
-                ffmpeg_exe, "-y",
-                "-ss", f"{start:.3f}",
-                "-i", self.video_info.path,
-                "-t", f"{duration:.3f}",
-                "-c", "copy",
-                out_path,
-            ]
-
+    def _run_remove_segments(self, out_path, keep_segments, precise):
+        """`keep_segments` içindeki aralıkları çıkarıp (kalanları koruyarak)
+        tek bir MP4 olarak birleştirir. Böylece `keep_segments` arasındaki
+        boşluklar -yani kullanıcının işaretlediği bölümler- videodan
+        çıkarılmış olur."""
+        work_dir = tempfile.mkdtemp(prefix="remove_", dir=self._temp_dir)
         try:
-            result = subprocess.run(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-            )
-            if result.returncode != 0:
-                raise RuntimeError(result.stdout[-2000:])
-            self.root.after(0, self._cut_done, out_path, None)
-        except Exception as exc:
-            self.root.after(0, self._cut_done, out_path, exc)
+            if len(keep_segments) == 1:
+                start, end = keep_segments[0]
+                self._ffmpeg_run(self._build_cut_command(start, end, precise, out_path))
+            else:
+                segment_paths = []
+                for idx, (start, end) in enumerate(keep_segments):
+                    part_path = os.path.join(work_dir, f"part_{idx}.mp4")
+                    self._ffmpeg_run(self._build_cut_command(start, end, precise, part_path))
+                    segment_paths.append(part_path)
+                self._concat_via_demuxer(work_dir, segment_paths, out_path)
 
-    def _cut_done(self, out_path, error):
+            self.root.after(0, self._remove_segments_done, out_path, None)
+        except Exception as exc:
+            self.root.after(0, self._remove_segments_done, out_path, exc)
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+    def _remove_segments_done(self, out_path, error):
         self.progress.stop()
         self.btn_cut.config(state="normal")
         if error:
             self.set_status("Kesme işlemi başarısız.")
-            messagebox.showerror("Hata", f"Video kesilemedi:\n{error}")
+            messagebox.showerror("Hata", f"Video oluşturulamadı:\n{error}")
         else:
             self.set_status(f"Tamamlandı: {out_path}")
             messagebox.showinfo("Bitti", f"Kesilmiş video kaydedildi:\n{out_path}")
@@ -570,13 +760,6 @@ class CutterApp:
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
         work_dir = tempfile.mkdtemp(prefix="freeze_", dir=self._temp_dir)
 
-        def run(cmd):
-            result = subprocess.run(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-            )
-            if result.returncode != 0:
-                raise RuntimeError(result.stdout[-2000:])
-
         try:
             fps = self.video_info.fps or 25.0
             total_duration = self.video_info.duration
@@ -587,10 +770,9 @@ class CutterApp:
             part_a = os.path.join(work_dir, "part_a.mp4")
             freeze_clip = os.path.join(work_dir, "freeze.mp4")
             part_b = os.path.join(work_dir, "part_b.mp4")
-            concat_list = os.path.join(work_dir, "concat.txt")
 
             # 1) Dondurulacak andaki kareyi PNG olarak çıkar.
-            run([
+            self._ffmpeg_run([
                 ffmpeg_exe, "-y",
                 "-i", self.video_info.path,
                 "-ss", f"{freeze_time:.3f}",
@@ -602,7 +784,7 @@ class CutterApp:
 
             # 2) Baştan donma anına kadar olan parça (varsa).
             if freeze_time > 0.05:
-                run([
+                self._ffmpeg_run([
                     ffmpeg_exe, "-y",
                     "-i", self.video_info.path,
                     "-t", f"{freeze_time:.3f}",
@@ -615,7 +797,7 @@ class CutterApp:
                 segment_paths.append(part_a)
 
             # 3) Dondurulan kare + sessiz ses, istenen süre boyunca.
-            run([
+            self._ffmpeg_run([
                 ffmpeg_exe, "-y",
                 "-loop", "1", "-i", frame_path,
                 "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
@@ -631,7 +813,7 @@ class CutterApp:
 
             # 4) Donma anından videonun sonuna kadar olan parça (varsa).
             if tail_duration > 0.05:
-                run([
+                self._ffmpeg_run([
                     ffmpeg_exe, "-y",
                     "-ss", f"{freeze_time:.3f}",
                     "-i", self.video_info.path,
@@ -645,31 +827,7 @@ class CutterApp:
                 segment_paths.append(part_b)
 
             # 5) Parçaları concat demuxer ile tek dosyada birleştir.
-            with open(concat_list, "w", encoding="utf-8") as f:
-                for p in segment_paths:
-                    escaped = p.replace("'", "'\\''")
-                    f.write(f"file '{escaped}'\n")
-
-            try:
-                run([
-                    ffmpeg_exe, "-y",
-                    "-f", "concat", "-safe", "0",
-                    "-i", concat_list,
-                    "-c", "copy",
-                    out_path,
-                ])
-            except Exception:
-                # Parametre uyuşmazlığı gibi bir sebeple kopyalama başarısız
-                # olursa, birleştirirken yeniden kodlayarak tekrar dene.
-                run([
-                    ffmpeg_exe, "-y",
-                    "-f", "concat", "-safe", "0",
-                    "-i", concat_list,
-                    "-pix_fmt", "yuv420p",
-                    "-c:v", "libx264",
-                    "-c:a", "aac",
-                    out_path,
-                ])
+            self._concat_via_demuxer(work_dir, segment_paths, out_path)
 
             self.root.after(0, self._freeze_done, out_path, None)
         except Exception as exc:

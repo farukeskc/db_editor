@@ -1,8 +1,9 @@
 # db_editor
 
 Çok basit iki masaüstü video editörü uygulaması içerir: biri MP4 üzerine
-mikrofonla ses dublajı yapar (`app.py`), diğeri MP4 videolarını kesip
-(trim) yeni bir dosya olarak dışa aktarır (`cutter_app.py`).
+mikrofonla ses dublajı yapar (`app.py`), diğeri MP4'ten istediğiniz
+bölüm(ler)i kesip çıkarır ve kalanı yeni bir dosya olarak dışa aktarır
+(`cutter_app.py`).
 
 ## Kurulum
 
@@ -39,6 +40,13 @@ python app.py
 
 ## Kesme (Cut) Editörü (`cutter_app.py`)
 
+Bu uygulama, videoyu "yalnızca seçilen aralığı tut" mantığıyla değil,
+**"işaretlenen bölüm(ler)i videodan çıkar, geri kalanı birleştir"**
+mantığıyla çalışır. Yani örneğin videonun 10.-15. saniyelerini
+işaretleyip çıkarırsanız, sonuçta 0-10 ile 15-son arası birleştirilmiş
+tek bir video elde edersiniz (10-15 arası tamamen silinmiş olur).
+Birden fazla bölüm işaretleyip aynı anda çıkarabilirsiniz.
+
 ### Çalıştırma
 
 ```bash
@@ -50,20 +58,28 @@ python cutter_app.py
 1. **MP4 Aç...** ile bir video dosyası seçin.
 2. Zaman çubuğunu sürükleyerek videoda gezinin; önizleme karesi anlık
    güncellenir.
-3. İstediğiniz noktada **Buradan İşaretle** ile başlangıç/bitiş zamanlarını
-   belirleyin (ya da saniye cinsinden doğrudan kutulara yazıp **Git** ile
-   o noktaya atlayın).
-4. **Seçimi Önizle** ile seçtiğiniz aralığı oynatarak kontrol edin.
-5. **✂ Kes ve Dışa Aktar** ile seçili aralığı yeni bir MP4 dosyası olarak
-   kaydedin.
+3. Çıkarmak istediğiniz bölümün başlangıç/bitişini **Buradan İşaretle**
+   ile (ya da saniye cinsinden doğrudan kutulara yazıp **Git** ile o
+   noktaya atlayarak) belirleyin. **Seçimi Önizle** ile bu aralığı
+   oynatarak kontrol edebilirsiniz.
+4. **➕ Bu Aralığı Listeye Ekle** ile işaretlediğiniz bölümü "çıkarılacak
+   bölümler" listesine ekleyin. İsterseniz birden fazla bölüm ekleyin;
+   liste otomatik olarak çakışan/bitişik aralıkları birleştirir ve kalan
+   video uzunluğunu gösterir. Yanlış eklenen bir satırı **Seçili Satırı
+   Sil** ile kaldırabilir, **Listeyi Temizle** ile hepsini silebilirsiniz.
+5. **✂ Bölümleri Çıkar ve Dışa Aktar** ile listedeki bölümler videodan
+   çıkarılmış, kalanı birleştirilmiş yeni bir MP4 dosyası kaydedin.
 
 ### Notlar
 
 - Varsayılan kesim modu hızlıdır (ses/görüntü yeniden kodlanmaz, `stream
-  copy`), ancak başlangıç noktası en yakın keyframe'e yuvarlanabilir.
-- **"Kare hassasiyetiyle kes"** kutusunu işaretlerseniz video yeniden
-  kodlanır (daha yavaştır) ve kesim tam olarak belirttiğiniz saniyeden
-  başlar.
+  copy`), ancak kesim noktaları en yakın keyframe'e yuvarlanabilir.
+- **"Kare hassasiyetiyle kes"** kutusunu işaretlerseniz her parça yeniden
+  kodlanır (daha yavaştır) ama kesim noktaları tam olarak belirttiğiniz
+  saniyeden başlar/biter.
+- Birden fazla bölüm çıkarıldığında, kalan parçalar `ffmpeg`'in `concat`
+  demuxer'ı ile birleştirilir; parametre uyuşmazlığı olursa uygulama
+  otomatik olarak yeniden kodlayarak birleştirmeyi dener.
 - Kesme işlemi için de `imageio-ffmpeg` paketiyle gelen ffmpeg binary'si
   kullanılır.
 
